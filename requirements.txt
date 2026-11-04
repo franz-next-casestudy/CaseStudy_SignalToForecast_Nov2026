@@ -1,1 +1,6 @@
-streamlit
+xlrd>=2.0.2,<3
+sec-edgar-downloader==5.1.0
+requests>=2.31,<3
+streamlit>=1.57,<2
+python-dotenv>=1.0,<2
+pandas>=2.2,<4
