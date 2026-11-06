@@ -1,9 +1,15 @@
-"""Retrieve Delta financials, TSA throughput, EIA jet fuel, and FRED airfare CPI.
+"""Retrieve Delta financials, TSA throughput and FRED airfare CPI.
 
 Run: python data_retrieval.py
 Use --download-sec to refresh SEC filings with SEC_NAME and SEC_EMAIL configured.
 Use --sec-test to test two SEC downloads without running the CSV pipeline.
 CSV output defaults to input_data beside this script. No API keys required.
+Complete historical TSA years are reused unless --refresh-tsa-history is set.
+After one official-source failure, the backup is tried once, then validated
+cached data is retained. Recovery, age and gaps are logged separately.
+--require-fresh-tsa and --require-complete-tsa enable strict CLI checks.
+Optional legacy fuel retrieval requires --sources eia; it is not an app input.
+In an explicit combined run, use --require-eia to make fuel failure blocking.
 """
 
 import argparse
@@ -12,10 +18,11 @@ import contextlib
 import csv
 import hashlib
 import io
+import json
 import os
 import re
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
@@ -24,7 +31,10 @@ from urllib.request import Request, urlopen
 
 METRICS = ("passenger_revenue_usd_millions", "rpm_millions", "asm_millions",
            "passenger_yield_cents", "load_factor_percent")
-
+TSA_FALLBACK_URL = "https://securitywaittimes.com/wp-json/swt-tp/v1/national"
+DOWNLOAD_ERRORS = (HTTPError, URLError, TimeoutError, OSError)
+LOG_FIELDS = ["dataset", "requested_url", "source_url", "retrieved_at_utc", "http_status",
+              "sha256", "raw_file", "status", "error", "details_json"]
 
 class PageInspector(HTMLParser):
     def __init__(self):
@@ -108,14 +118,38 @@ def write_csv(path, rows, fields=None):
         writer.writerows(rows)
 
 
+def log_entry(dataset, url=""):
+    return {"dataset": dataset, "requested_url": url, "source_url": "",
+            "retrieved_at_utc": datetime.now(timezone.utc).isoformat(), "http_status": "",
+            "sha256": "", "raw_file": "", "status": "failed", "error": "", "details_json": ""}
+
+
 def download(dataset, url, output_dir, timeout, log):
-    entry = {"dataset": dataset, "requested_url": url, "source_url": "",
-             "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
-             "http_status": "", "sha256": "", "raw_file": "", "status": "failed", "error": ""}
+    entry = log_entry(dataset, url)
     log.append(entry)
     try:
         request = Request(url, headers={"User-Agent": "SignalToForecastCaseStudy/1.0"})
-        if dataset == "fred_airfare_cpi":
+        if dataset.startswith("tsa_"):
+            from curl_cffi import requests as curl_requests
+
+            try:
+                with curl_requests.Session(impersonate="chrome") as session:
+                    response = session.get(
+                        url,
+                        timeout=timeout,
+                        allow_redirects=True,
+                        max_redirects=3,
+                    )
+                    entry.update(
+                        source_url=str(response.url),
+                        http_status=response.status_code,
+                    )
+                    response.raise_for_status()
+                    body = response.content
+            except curl_requests.RequestsError as error:
+                raise OSError(f"TSA download failed: {error}") from error
+
+        elif dataset in ("fred_airfare_cpi", "security_wait_times_tsa"):
             import requests
 
             try:
@@ -124,7 +158,8 @@ def download(dataset, url, output_dir, timeout, log):
                 response.raise_for_status()
                 body = response.content
             except requests.RequestException as error:
-                raise OSError(f"FRED CSV download failed: {error}") from error
+                provider = "Security Wait Times JSON" if dataset == "security_wait_times_tsa" else "FRED CSV"
+                raise OSError(f"{provider} download failed: {error}") from error
         else:
             with urlopen(request, timeout=timeout) as response:
                 body = response.read()
@@ -133,12 +168,14 @@ def download(dataset, url, output_dir, timeout, log):
         suffix = ".xls" if body.startswith(bytes.fromhex("D0CF11E0")) else ".html"
         if url.split("?", 1)[0].endswith(".csv"):
             suffix = ".csv"
+        if dataset == "security_wait_times_tsa":
+            suffix = ".json"
         snapshot = output_dir / "raw" / f"{dataset}_{entry['sha256'][:16]}{suffix}"
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         snapshot.write_bytes(body)
-        entry.update(raw_file=str(snapshot), status="downloaded")
+        entry.update(raw_file=str(snapshot.relative_to(output_dir)), status="downloaded")
         return body, entry
-    except (HTTPError, URLError, TimeoutError, OSError) as error:
+    except DOWNLOAD_ERRORS as error:
         entry["error"] = str(error)
         if isinstance(error, HTTPError):
             entry.update(http_status=error.code, source_url=error.geturl())
@@ -455,7 +492,10 @@ def parse_tsa(inspector):
         except ValueError:
             continue
         if passengers > 0 and observation_date <= date.today():
-            observations[observation_date.isoformat()] = passengers
+            day = observation_date.isoformat()
+            if day in observations:
+                raise ValueError(f"TSA page contains duplicate date {day}.")
+            observations[day] = passengers
     return [{"date": day, "passengers": str(count)} for day, count in sorted(observations.items())]
 
 
@@ -483,13 +523,21 @@ def metadata(entry):
             "source_sha256": entry["sha256"]}
 
 
-def retrieve_tsa(start_year, end_year, output_dir, timeout, log):
-    observations = []
-    for year in range(start_year, end_year + 1):
-        url = "https://www.tsa.gov/travel/passenger-volumes"
-        if year != date.today().year:
-            url += f"/{year}"
-        body, entry = download(f"tsa_{year}", url, output_dir, timeout, log)
+def daily_dates(first, last):
+    return {(first + timedelta(days=offset)).isoformat() for offset in range((last - first).days + 1)}
+
+
+def complete_tsa_year(rows, year):
+    actual = {row["date"] for row in rows if date.fromisoformat(row["date"]).year == year}
+    return year < date.today().year and actual == daily_dates(date(year, 1, 1), date(year, 12, 31))
+
+
+def retrieve_tsa_official_year(year, output_dir, timeout, log):
+    url = "https://www.tsa.gov/travel/passenger-volumes"
+    if year != date.today().year:
+        url += f"/{year}"
+    body, entry = download(f"tsa_{year}", url, output_dir, timeout, log)
+    try:
         inspector = PageInspector()
         inspector.feed(body.decode("utf-8", errors="replace"))
         rows = parse_tsa(inspector)
@@ -497,18 +545,171 @@ def retrieve_tsa(start_year, end_year, output_dir, timeout, log):
             raise ValueError(f"TSA {year}: no daily observations found.")
         if any(date.fromisoformat(row["date"]).year != year for row in rows):
             raise ValueError(f"TSA {year}: unexpected observation year.")
-        if len({row["date"] for row in rows}) != len(rows):
-            raise ValueError(f"TSA {year}: duplicate dates.")
         expected_end = date(year, 12, 31) if year < date.today().year else date.fromisoformat(rows[-1]["date"])
-        expected_days = (expected_end - date(year, 1, 1)).days + 1
-        if len(rows) != expected_days:
-            raise ValueError(f"TSA {year}: expected {expected_days} daily observations, found {len(rows)}.")
-        if year == date.today().year and (date.today() - expected_end).days > 7:
-            raise ValueError("Current TSA observations are more than seven days old.")
-        observations.extend({**row, **metadata(entry)} for row in rows)
+        expected = daily_dates(date(year, 1, 1), expected_end)
+        if {row["date"] for row in rows} != expected:
+            raise ValueError(f"TSA {year}: expected {len(expected)} daily observations, found {len(rows)}.")
         entry["status"] = "parsed"
-        print(f"TSA {year}: {len(rows)} daily observations")
+        print(f"TSA {year}: downloaded {len(rows)} daily observations")
+        return [{**row, **metadata(entry)} for row in rows]
+    except (ValueError, KeyError) as error:
+        entry.update(status="parse_failed", error=str(error))
+        raise
+
+
+def retrieve_tsa_official(start_year, end_year, output_dir, timeout, log):
+    observations = []
+    for year in range(start_year, end_year + 1):
+        observations.extend(retrieve_tsa_official_year(year, output_dir, timeout, log))
     return sorted(observations, key=lambda row: row["date"])
+
+
+def cached_tsa_rows(output_dir, start_year, end_year):
+    path = Path(output_dir) / "tsa_daily.csv"
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"date", "passengers", "source_url", "source_sha256", "retrieved_at_utc", "availability_status", "published_date"}
+        if not required.issubset(reader.fieldnames or []):
+            raise ValueError("Saved TSA CSV lacks required observation/provenance columns; it was not overwritten.")
+        if len(reader.fieldnames) != len(set(reader.fieldnames)):
+            raise ValueError("Saved TSA CSV contains duplicate columns; it was not overwritten.")
+        rows = list(reader)
+    seen = set()
+    for row in rows:
+        if None in row or any(value is None for value in row.values()):
+            raise ValueError("Malformed saved TSA CSV; it was not overwritten.")
+        observed = date.fromisoformat(row["date"])
+        if row["date"] != observed.isoformat() or observed > date.today() or row["date"] in seen or not re.fullmatch(r"\d+", row["passengers"]) or int(row["passengers"]) <= 0:
+            raise ValueError("Invalid or duplicate saved TSA observations; CSV was not overwritten.")
+        if not (row["source_url"].startswith("https://www.tsa.gov/") or row["source_url"] == TSA_FALLBACK_URL):
+            raise ValueError("Unexpected source in saved TSA CSV; it was not overwritten.")
+        if not re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]):
+            raise ValueError("Invalid hash in saved TSA CSV; it was not overwritten.")
+        retrieved = datetime.fromisoformat(row["retrieved_at_utc"].replace("Z", "+00:00"))
+        if retrieved.tzinfo is None or not row["availability_status"]:
+            raise ValueError("Missing retrieval metadata in saved TSA CSV; it was not overwritten.")
+        seen.add(row["date"])
+    return sorted([row for row in rows if start_year <= date.fromisoformat(row["date"]).year <= end_year], key=lambda row: row["date"])
+
+
+def parse_tsa_fallback(body):
+    payload = json.loads(body.decode("utf-8-sig"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("window"), dict) or not isinstance(payload.get("daily"), list):
+        raise ValueError("Security Wait Times returned an invalid national-count response.")
+    window = payload["window"]
+    if not all(isinstance(window.get(key), str) for key in ("from", "to")):
+        raise ValueError("Security Wait Times response lacks observation-window dates.")
+    first, last = date.fromisoformat(window["from"]), date.fromisoformat(window["to"])
+    if first > last or last > date.today():
+        raise ValueError("Security Wait Times contains a future or invalid observation window.")
+    rows = []
+    seen = set()
+    for item in payload["daily"]:
+        if not isinstance(item, dict) or not isinstance(item.get("date"), str):
+            raise ValueError("Malformed fallback observation.")
+        observed = date.fromisoformat(item["date"])
+        count = item.get("tsa_checkpoint_total")
+        if item["date"] != observed.isoformat() or not first <= observed <= last or observed in seen or isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise ValueError("Fallback requires unique dates and positive integer tsa_checkpoint_total values; people is not a substitute.")
+        rows.append({"date": observed.isoformat(), "passengers": str(count)})
+        seen.add(observed)
+    if not rows or len(rows) != (last - first).days + 1:
+        raise ValueError("Security Wait Times response has gaps in its stated daily window.")
+    return sorted(rows, key=lambda row: row["date"])
+
+
+def retrieve_tsa(start_year, end_year, output_dir, timeout, log,
+                 refresh_history=False, require_fresh=False, require_complete=False):
+    saved = cached_tsa_rows(output_dir, start_year, end_year)
+    merged = {row["date"]: row for row in saved}
+    origins = {row["date"]: "cache" for row in saved}
+    official_failed = False
+    reused_years, official_years = [], []
+    for year in range(start_year, end_year + 1):
+        if not refresh_history and complete_tsa_year(saved, year):
+            reused_years.append(year)
+            print(f"TSA {year}: reused complete validated historical cache")
+            continue
+        if official_failed:
+            print(f"TSA {year}: official request skipped after earlier source failure")
+            continue
+        try:
+            official = retrieve_tsa_official_year(year, output_dir, timeout, log)
+        except DOWNLOAD_ERRORS + (ValueError, KeyError) as error:
+            official_failed = True
+            print(f"TSA {year}: official source failed ({type(error).__name__}: {error}).")
+            continue
+        official_years.append(year)
+        for row in official:
+            merged[row["date"]] = row
+            origins[row["date"]] = "official"
+
+    fallback_added = 0
+    fallback_failed = False
+    fallback_latest = None
+    if official_failed:
+        entry = None
+        try:
+            body, entry = download("security_wait_times_tsa", TSA_FALLBACK_URL, output_dir, timeout, log)
+            fallback = parse_tsa_fallback(body)
+            fallback_latest = fallback[-1]["date"]
+            for row in fallback:
+                if not start_year <= date.fromisoformat(row["date"]).year <= end_year or row["date"] in merged:
+                    continue
+                merged[row["date"]] = {**row, **metadata(entry),
+                                       "availability_status": "fallback_security_wait_times_checkpoint_total; publication_and_revisions_not_verified"}
+                origins[row["date"]] = "fallback"
+                fallback_added += 1
+            entry["status"] = "parsed_fallback"
+            print(f"TSA fallback: provider ends {fallback_latest}; {fallback_added} missing dates added; existing overlaps preserved.")
+        except DOWNLOAD_ERRORS + (ValueError, KeyError, ImportError) as error:
+            fallback_failed = True
+            if entry is not None:
+                entry.update(status="parse_failed", error=str(error))
+            print(f"TSA fallback unavailable ({type(error).__name__}: {error}). Validated saved data retained.")
+
+    result = log_entry("tsa_result")
+    log.append(result)
+    if not merged:
+        result["error"] = "No validated saved or downloaded TSA observations fall within the requested years."
+        raise ValueError(result["error"])
+    rows = sorted(merged.values(), key=lambda row: row["date"])
+    latest = date.fromisoformat(rows[-1]["date"])
+    age = (date.today() - latest).days
+    expected_end = date(end_year, 12, 31) if end_year < date.today().year else latest
+    missing = sorted(daily_dates(date(start_year, 1, 1), expected_end) - set(merged))
+    stale = end_year == date.today().year and age > 7
+    recovery = "official"
+    if official_failed:
+        recovery = "backup" if not fallback_failed else "cache_only" if not official_years else "partial_official_and_cache"
+    details = {"recovery": recovery, "official_failed": official_failed,
+               "fallback_attempted": official_failed, "fallback_failed": fallback_failed,
+               "fallback_latest_observation": fallback_latest, "fallback_rows_added": fallback_added,
+               "coverage_start": rows[0]["date"], "latest_observation": latest.isoformat(),
+               "age_days": age, "stale": stale, "missing_count": len(missing), "missing_examples": missing[:10],
+               "cached_rows_retained": sum(value == "cache" for value in origins.values()),
+               "official_rows_refreshed": sum(value == "official" for value in origins.values()),
+               "historical_years_reused": reused_years, "official_years_refreshed": official_years}
+    result.update(status="degraded" if official_failed or missing or stale else "ok", details_json=json.dumps(details))
+    summary = (f"TSA {result['status'].upper()}: recovery={recovery}; {len(rows)} observations through {latest}; "
+               f"age={age} days; {len(missing)} missing dates; {fallback_added} backup rows added.")
+    result["error"] = summary if result["status"] == "degraded" else ""
+    print(summary)
+    if stale:
+        print("TSA WARNING: older observations require human review and the longer-run volume assumption.")
+    if missing:
+        print(f"TSA COVERAGE WARNING: {len(missing)} requested dates are missing; forecast input validation still applies.")
+    violations = []
+    if require_fresh and stale:
+        violations.append("current-year observations are more than seven days old")
+    if require_complete and missing:
+        violations.append(f"{len(missing)} daily observations are missing")
+    if violations:
+        result.update(status="rejected", error=summary + " Rejected: " + "; ".join(violations))
+        raise ValueError("TSA strict checks failed: " + "; ".join(violations))
+    return rows
 
 
 def retrieve_fuel(start_year, end_year, output_dir, timeout, log):
@@ -591,12 +792,17 @@ def main():
     parser.add_argument("--end-year", type=int, default=date.today().year)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "input_data")
     parser.add_argument("--timeout", type=float, default=20, help="Timeout in seconds for each request.")
-    parser.add_argument("--sources", nargs="+", choices=("delta", "tsa", "eia", "airfare"), default=["delta", "tsa", "eia", "airfare"])
+    parser.add_argument("--sources", nargs="+", choices=("delta", "tsa", "eia", "airfare"), default=["delta", "tsa", "airfare"])
+    parser.add_argument("--refresh-tsa-history", action="store_true", help="Refresh complete historical TSA years instead of reusing them.")
+    parser.add_argument("--require-fresh-tsa", action="store_true", help="Reject requested current-year TSA data older than seven days.")
+    parser.add_argument("--require-complete-tsa", action="store_true", help="Reject missing dates in the requested TSA coverage.")
+    parser.add_argument("--require-eia", action="store_true", help="Fail a combined run if optional EIA fuel context cannot be refreshed. An EIA-only run is always strict.")
     args = parser.parse_args()
-    if not 2019 <= args.start_year <= args.end_year <= date.today().year or args.timeout <= 0:
-        parser.error("Use years from 2019 through the current year and a positive timeout.")
+    if not 2019 <= args.start_year <= args.end_year <= date.today().year or not 0 < args.timeout < float("inf"):
+        parser.error("Use years from 2019 through the current year and a positive finite timeout.")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     log = []
+    promoted = []
     try:
         if args.download_sec or args.sec_test:
             refresh_sec(args.output_dir / "sec", args.start_year, args.end_year, args.sec_test)
@@ -610,11 +816,25 @@ def main():
                 evidence_fields = list(dict.fromkeys(key for entry in evidence for key in entry))
                 write_csv(staging / "delta_evidence.csv", evidence, evidence_fields)
             if "tsa" in args.sources:
-                rows = retrieve_tsa(args.start_year, args.end_year, args.output_dir, args.timeout, log)
-                write_csv(staging / "tsa_daily.csv", rows)
+                rows = retrieve_tsa(args.start_year, args.end_year, args.output_dir, args.timeout, log,
+                                    refresh_history=args.refresh_tsa_history, require_fresh=args.require_fresh_tsa,
+                                    require_complete=args.require_complete_tsa)
+                outside = [row for row in cached_tsa_rows(args.output_dir, 1, date.today().year)
+                           if not args.start_year <= date.fromisoformat(row["date"]).year <= args.end_year]
+                rows = sorted(outside + rows, key=lambda row: row["date"])
+                tsa_fields = list(dict.fromkeys(key for row in rows for key in row))
+                write_csv(staging / "tsa_daily.csv", rows, tsa_fields)
             if "eia" in args.sources:
-                rows = retrieve_fuel(args.start_year, args.end_year, args.output_dir, args.timeout, log)
-                write_csv(staging / "jet_fuel_weekly.csv", rows)
+                try:
+                    rows = retrieve_fuel(args.start_year, args.end_year, args.output_dir, args.timeout, log)
+                    write_csv(staging / "jet_fuel_weekly.csv", rows)
+                except DOWNLOAD_ERRORS + (ValueError, ImportError, ArithmeticError, KeyError) as error:
+                    if args.require_eia or set(args.sources) == {"eia"}:
+                        raise
+                    (staging / "jet_fuel_weekly.csv").unlink(missing_ok=True)
+                    if log and log[-1]["dataset"] == "eia_jet_fuel":
+                        log[-1].update(status="optional_context_failed", error=str(error))
+                    print("EIA WARNING: optional fuel context could not be refreshed. Existing fuel data, if any, was retained; primary forecast inputs continue through validation.")
             if "airfare" in args.sources:
                 rows = retrieve_airfare(args.start_year, args.end_year, args.output_dir, args.timeout, log)
                 write_csv(staging / "airfare_cpi_monthly.csv", rows)
@@ -622,18 +842,25 @@ def main():
                 source = staging / filename
                 if source.exists():
                     source.replace(args.output_dir / filename)
+                    promoted.append(filename)
         print(f"CSV datasets saved in {args.output_dir.resolve()}")
-        print("Historical signal publication dates and revisions remain unverified; this is not yet a point-in-time backtest dataset.")
+        print("These are live/latest-vintage inputs, not historical backtest snapshots. Historical evaluation uses the separate ALFRED and TSA vintage downloaders.")
         return 0
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, ImportError, ArithmeticError, KeyError) as error:
+    except DOWNLOAD_ERRORS + (ValueError, ImportError, ArithmeticError, KeyError) as error:
         if log and log[-1]["status"] == "downloaded":
             log[-1].update(status="parse_failed", error=str(error))
         print(f"RETRIEVAL FAILED: {error}")
-        print("Existing complete datasets were not replaced. See retrieval_log.csv for source diagnostics.")
+        failed = next((entry for entry in reversed(log) if entry["status"] in ("failed", "parse_failed") and entry["requested_url"]), None)
+        if failed:
+            print(f"Source: {failed['dataset']} | URL: {failed['requested_url']} | HTTP: {failed['http_status'] or 'not available'}")
+        if promoted:
+            print(f"Files already replaced before the write failure: {', '.join(promoted)}. Other datasets were not replaced.")
+        else:
+            print("Existing datasets were not replaced. See retrieval_log.csv for source diagnostics.")
         return 1
     finally:
         if log:
-            write_csv(args.output_dir / "retrieval_log.csv", log)
+            write_csv(args.output_dir / "retrieval_log.csv", log, LOG_FIELDS)
 
 
 if __name__ == "__main__":

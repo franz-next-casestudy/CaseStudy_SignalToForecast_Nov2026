@@ -1,208 +1,132 @@
-# Delta Data Retrieval
+# Signal to Forecast
 
-One self-contained Python 3.10+ script downloads SEC documents, extracts Delta
-financials, refreshes TSA/EIA/FRED signals, and saves validated CSVs with provenance.
-The separate `app.py` provides a password-protected deployment test. The original
-app in `0_TestDeployment` remains unchanged.
+Delta Air Lines passenger-revenue forecasting case study. The application refreshes public sources, asks an LLM to assess demand and pricing evidence, calculates six quarterly forecasts, and requires human review before publication.
 
-## Test Deployment App
+Independent case study. Not investment advice. Not affiliated with Delta Air Lines. Only public data is used.
 
-From this folder, install dependencies and start the app:
+## Start locally
 
-```powershell
-python -m pip install -r requirements.txt
-python -m streamlit run app.py
-```
-
-The local `.env` file has blank credential fields and is ignored by Git. Fill in
-the following values privately; restart the server after changing the file.
-Existing process environment variables take precedence over `.env`, and
-Streamlit secrets take precedence over both. The app loads `.env` automatically;
-the standalone retrieval CLI still expects SEC identity in its process environment.
-
-| Variable | Required For | Value |
-| --- | --- | --- |
-| `APP_PASSWORD` | Opening the dashboard | A long, unique random password, preferably 20+ characters |
-| `GEMINI_API_KEY` | Gemini test | Your Google AI Studio API key |
-| `GEMINI_MODEL` | Optional | Defaults to `gemini-3.8-flash`; use a model ID available to your key and free-tier quota |
-| `SEC_NAME` | Downloading SEC filings | Your real name or organization identifying the request |
-| `SEC_EMAIL` | Downloading SEC filings | A valid contact email for SEC identification |
-
-TSA, EIA and FRED downloads do not need API keys. Saved CSVs can be inspected
-without SEC identity or a Gemini key. To rebuild financial CSVs without an SEC
-download, the local SEC manifest and original documents must also exist.
-
-On Streamlit Community Cloud, select this folder's `app.py` as the entry point
-and paste the following top-level TOML entries into the app's **Secrets** settings,
-replacing the placeholders privately. Do not upload `.env` or commit a secrets file.
-
-```toml
-APP_PASSWORD = "your-long-unique-password"
-GEMINI_API_KEY = "your-google-ai-studio-key"
-GEMINI_MODEL = "gemini-3.8-flash"
-SEC_NAME = "your-name-or-organization"
-SEC_EMAIL = "your-contact-email"
-```
-
-Include the saved `input_data/*.csv` files in the deployment for immediate
-inspection. SEC originals are ignored by Git; on a fresh Cloud instance, keep
-**Refresh SEC filings** selected when refreshing financials. Hosting access to
-SEC/TSA must be tested separately; local success does not guarantee Cloud access.
-If SEC is blocked, stop retrying and keep the saved CSVs for inspection.
-
-The app is titled **Test Deployment**, with **Data & API Connections** shown
-after unlocking. It offers selected-source refresh, CSV coverage/freshness/value
-and provenance checks, recent rows, a history chart, and a Gemini connection test.
-The displayed checks are a lightweight inspection, not the full retrieval
-validation or a point-in-time audit. Refreshing runs the existing retrieval
-validator. Failed retrievals retain the existing CSVs; a hard timeout may leave
-partial raw downloads, so inspect the data before retrying.
-
-Gemini receives only a compact summary of public CSV observations, units and
-quality flags. It is asked which dataset has the newest observation and which
-caveats need review. The app validates JSON structure, not the factual accuracy
-of its prose; this is a connection test, not yet a forecasting agent. No automatic
-API call is made on page load. Invalid keys, model access, quota errors and
-timeouts are surfaced without exposing the key or retrying automatically.
-Transient server errors (HTTP 500, 502, 503 or 504) receive one immediate retry
-only, with a maximum of two attempts per click. Persistent errors stop the test;
-no alternate model is selected automatically. Successful response logs include
-the attempt count. A 503 indicates temporary provider unavailability or overload,
-not evidence that the API key is invalid.
-Free-tier availability depends on the selected model/account; no billing is needed
-for the other sources.
-
-Security and operational limits:
-
-- Access fails closed when `APP_PASSWORD` is blank. The password is checked
-  server-side, removed from widget state after submission, and never logged.
-- Five failed attempts pause that browser session for one minute. This is a
-  temporary shared-password gate, not individual identity, MFA or robust
-  brute-force protection. Use platform access controls or OIDC for sensitive data.
-- Network actions are serialized within one server process, with a one-minute
-  cooldown per action across sessions. This is not a durable quota or spending cap;
-  use provider quotas and do not share the password publicly.
-- Signal requests time out after 30 seconds each; an entire refresh is capped at
-  ten minutes. Each Gemini attempt has a 45-second read timeout and a bounded
-  output size; a transient-error retry can extend the overall wait.
-- Run logs hold the last 20 actions in the current session, not a persistent audit
-  trail. Logs redact configured credentials. Sign-out clears session results.
-- Cloud disk, caches and sessions are ephemeral. Downloads may need repeating
-  after a restart. No forecast or approval/publication workflow exists yet.
-
-## Run
-
-From this folder, install dependencies once:
+Run commands from the project directory. Python 3.11–3.12 is recommended; the clean setup is checked on Python 3.12.
 
 ```powershell
+python -m venv .venv
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-For all four datasets, use:
+Keep these application files together: `app.py`, `forecast_views.py`, `forecast_workflow.py`, `forecasting.py`, `data_retrieval.py`, `run_controls.py`, and `verify_quarters.py`. Historical reconstruction also needs `download_airfare_vintages.py`, `download_tsa_vintages.py`, and `tsa_access_probe.py`. Include the tests and the light-theme `.streamlit/config.toml`.
 
-```powershell
-python data_retrieval.py
+The application reads local `.env` settings automatically. Example values:
+
+```dotenv
+APP_PASSWORD=replace-with-a-private-reviewer-password
+GEMINI_API_KEY=replace-with-your-private-key
+GEMINI_MODEL=gemini-3.5-flash-lite
+SEC_NAME=Your Name
+SEC_EMAIL=your-contact-email@example.com
+LLM_DAILY_CALL_LIMIT=20
 ```
 
-The default pipeline reads Delta from the local `input_data/sec/filing_manifest.csv`
-and refreshes TSA, EIA, and FRED over the network. To process only Delta, pass
-`--sources delta`; this requires no network requests or credentials.
+Streamlit secrets override process environment variables, which override `.env`. Hosted Streamlit secrets use the same keys as quoted, top-level TOML values. No secrets are needed to view an already published snapshot. CLI retrieval does not load `.env`; set SEC identification in the terminal that runs it:
 
-To download or refresh SEC documents before generating CSVs:
+```powershell
+$env:SEC_NAME = "Your Name"
+$env:SEC_EMAIL = "your-contact-email@example.com"
+# macOS/Linux: export SEC_NAME="Your Name" SEC_EMAIL="your-contact-email@example.com"
+```
+
+## Retrieve data and run a forecast
 
 ```powershell
 python data_retrieval.py --download-sec
+python verify_quarters.py
+python -m streamlit run app.py
 ```
 
-Configure `SEC_NAME` and `SEC_EMAIL` in that same terminal first. The script sends
-them to SEC as the required User-Agent but does not print them or save them in
-project outputs. These are identity values, not API keys. For a small SEC-only
-access test, run `python data_retrieval.py --sec-test`; it requests one recent
-10-Q and one 10-K filed in 2020. Cached files do not prove a new document download.
-Do not repeatedly retry if SEC blocks access.
+Default retrieval downloads SEC filings, TSA daily throughput and FRED/BLS airfare CPI into `input_data/`. TSA uses `curl_cffi`; complete validated historical years are reused, and the current year is refreshed. Source hashes, retrieval times and original responses are retained locally. These are automatically generated runtime files, not hand-pasted inputs or datasets to commit to Git.
 
-Use `--start-year` / `--end-year` to restrict reporting years (default 2019 through
-the current year), `--sources delta tsa eia airfare` to select datasets, `--output-dir`
-to change the output location, and `--timeout` for signal-request timeouts.
-SEC downloads also include the following filing year where available so the
-selected final year's annual report can be retrieved. Requests are sequential.
-Exit code 0 means the selected workflow succeeded, 1 means retrieval or validation
-failed, and 2 means invalid command-line arguments. Output CSVs are replaced only
-after the selected datasets pass validation.
+TSA and FRED need no API keys. SEC requires an identifying name and email; the AI assessment requires a Gemini key with available quota. Fuel is not displayed in the app, is not a forecast input and is excluded from both the default CLI and app refresh. Its optional legacy downloader remains available only through an explicit `--sources eia` command. Explicit combined runs can use `--require-eia` to make a fuel failure blocking.
 
-## Outputs
+Official TSA access succeeded on the development Windows machine, including a clean historical download. A separate fresh Linux-host check returned HTTP 403 despite the same client; its stale/incomplete backup was correctly rejected by strict checks. Access is network-dependent, and hosted source access remains unverified. The approved public overview itself does not request TSA or invoke the LLM.
 
-- `input_data/delta_quarterly.csv`: passenger revenue (USD millions), RPM and
-  ASM (millions), yield (cents), and load factor (percent), plus SEC source links.
-- `input_data/delta_evidence.csv`: join on `quarter` and `result_metric` for
-  per-value source links, accession numbers, filing dates, SEC acceptance times
-  as supplied in Eastern time, local document hashes, XBRL contexts or table
-  labels, result values, formulas, and source input values.
-- `input_data/tsa_daily.csv`: daily passenger counts with source URLs and retrieval metadata.
-- `input_data/jet_fuel_weekly.csv`: weekly USD-per-gallon prices with source URLs and retrieval metadata.
-- `input_data/airfare_cpi_monthly.csv`: BLS airline-fares CPI via FRED, series
-  `CUSR0000SETG01`, monthly and seasonally adjusted, index 1982-1984=100. Includes
-  the series-page URL, download URL, retrieval time, source hash, units, and
-  value status. Source blanks remain empty with `missing_at_source`; no values
-  are interpolated. To refresh only this source, run:
+Useful source-specific checks:
 
-  ```powershell
-  python data_retrieval.py --sources airfare
-  ```
-- `input_data/retrieval_log.csv`: diagnostics for signal download attempts.
-- `input_data/sec`: original submissions, primary documents, and a CSV manifest.
-- `input_data/raw`: hashed snapshots of downloaded signal responses.
+```powershell
+python data_retrieval.py --sources tsa --output-dir tsa_clean_test
+python data_retrieval.py --sources tsa --require-fresh-tsa --require-complete-tsa
+```
 
-Existing `delta_source_check` snapshots are preserved for reference but are no
-longer used by the script. SEC documents and old probe snapshots remain ignored
-by Git. Manifest inventory timestamps are not SEC publication dates.
+In the app:
 
-## Provenance And Validation
+1. **Overview** explains the case and the six stages of the workflow; it has no forecast figures. **Approved forecast** contains the approved results. **Run & review** contains execution, inspection and publication.
+2. Select **Run data load & forecast**, then choose **View cached forecast** (no network or AI calls) or **Load latest data & generate forecast**. For a fresh run, enter the submission access code when prompted, then select **Start fresh run**. The API key remains server-side.
+3. Inspect the unapproved draft, observed signals, AI recommendations, source links and historical comparison. Select **Review AI choices** to continue.
+4. Review the current strategies and their evidence. Optionally expand the adjustment form, choose recent/fading versus longer-run growth, and apply additional percentage-point shifts with a reason. **Recalculate as new draft** uses the same data, preserves the earlier run and shows the numerical effect. It never publishes automatically. Recalculation requires live access; cached inspection does not.
+5. **Approve & publish** opens a confirmation of the exact saved draft and its assumptions. Re-enter the access code, add a reviewer label and approval note, and acknowledge the limitations. **Confirm publication** replaces the forecast on the public **Approved forecast** page. Unsaved form edits are not published. Anyone with the code may publish; there is no separate owner permission role.
 
-In the app, show the direct SEC `source_url` beside a reported metric. For a
-derived figure, show the formula and all distinct input links from the evidence
-CSV. Q4 revenue is annual minus reported nine-month revenue; Q4 RPM and ASM are
-annual minus the first three quarters. Q4 yield and load factor are recomputed
-from their components, never obtained by subtracting annual ratios.
+New runs compare with the latest completed saved forecast, selected by generation time across saved draft/approval records. A later approval of an older forecast does not make it a newer numerical run. The comparison timestamp and status are displayed; **Compare with approved forecast** remains separate.
 
-Revenue extraction requires the exact `us-gaap:PassengerMember` dimension; it
-does not confuse passenger ticket or loyalty components with total revenue.
-Operating metrics require consolidated table headers and verified units.
-Validation checks complete quarterly coverage, positive metrics, source evidence,
-load factors, and traffic/yield identities with published-value rounding tolerance.
-The 2025 first-three-quarter revenue sum exceeds the nine-month figure by USD
-1 million. That difference is recorded explicitly; discrepancies greater than
-USD 2 million stop extraction.
+Public visitors can view approved results and inspect an available cached draft without signing in. Authentication is requested in context for live execution or recalculation, and again at every publication. A fresh checkout includes one explicitly approved submission snapshot. The public Approved forecast page displays it without live retrieval or an AI request. A concurrent change to the working-review record blocks recalculation/publication until the reviewer refreshes and inspects the review again.
 
-`published_date` is the conservative SEC filing date, not the earnings-release
-date. Intraday cutoffs must use SEC acceptance times, not assume a filing was
-available at the start of its filing day. This is a first-disclosure dataset,
-not a full history of restatement vintages. Signal publication dates and revisions
-still need separate validation for a no-look-ahead backtest. The latest reported
-quarter must also be checked against earnings releases before submission.
+## Reproduce the historical numerical backtest
 
-## Sources
+First retrieve the SEC history as above. Then reconstruct the four historical signal information sets:
 
-- [SEC EDGAR](https://www.sec.gov/edgar/browse/?CIK=27904): Delta 10-Q/10-K filings.
-- [TSA](https://www.tsa.gov/travel/passenger-volumes): current and yearly passenger
-  tables. Only each observation's own-year count is used, not comparison columns.
-- [EIA XLS](https://www.eia.gov/dnav/pet/hist_xls/EER_EPJK_PF4_RGC_DPGw.xls): weekly
-  US Gulf Coast jet fuel spot prices. Fuel is an indirect revenue signal.
-- [FRED airfare CPI](https://fred.stlouisfed.org/series/CUSR0000SETG01): monthly
-  market-pricing proxy, not Delta's yield or an actual ticket price. The script
-  uses FRED's date-bounded CSV download endpoint with `requests`; no API key is
-  required. It retrieves the latest vintage, not historical ALFRED vintages.
+```powershell
+python download_airfare_vintages.py
+python download_tsa_vintages.py --cutoffs 2024-09-01 2024-12-01 2025-03-01 2025-06-01
+python forecasting.py --backtest-only --cutoff 2026-11-05 --output-dir output_data/vintage_backtest
+```
 
-Current TSA data must be no more than 7 days old; fuel data no more than 14 days.
-The latest nonmissing airfare observation month must be no more than 95 days
-old. Monthly rows must be continuous; explicitly blank source values are allowed
-and flagged. FRED dates label the observation month, not its release date, and
-seasonally adjusted history can be revised. In particular, retain the October
-2025 source blank rather than treating it as zero. Point-in-time airfare backtests
-still require historical release/vintage handling.
-These are operational checks, not proof of publication timing. Historical signal
-revisions and release dates remain unverified. Local access also does not prove
-access from Streamlit Community Cloud.
+The vintage downloaders require network access. The backtest command is offline and makes no LLM request, approval or publication. Do not substitute today's signal CSVs if an archive cannot be retrieved.
 
-The script does not bypass access controls, prove reuse permissions, validate
-predictive value, or certify a no-look-ahead backtest.
+ALFRED snapshots use the previous calendar day's vintage. TSA observations are checked against preserved pre-cutoff Wayback captures. Archive requests are sequential with a default 30-second pause after each response. A 429 stops the downloader and saves a cooldown; respect that cooldown, then rerun the same command to resume. Completed sources and indexes are reused. Archive access can be slow or unavailable; a stopped reconstruction is not a successful backtest.
+
+`driver_run.json` records cutoff conventions, source verification, training windows and hashes. A successful historical-input audit requires the saved financial source documents and extraction evidence, not merely dated CSV rows. TSA captures provide a conservative information set and can precede a forecast date by several days. Financial history uses stored original-filing values, rather than a complete history of every earlier earnings announcement or later restatement.
+
+The app loads these results from `output_data/vintage_backtest/`, checks their model-code hash, financial-input hash, evaluation cutoff and scored predictions, then freezes the evaluation into a new draft. Existing approved snapshots retain their reviewed evaluation. A model/history change requires a matching backtest; a display-only change does not.
+
+For the reviewed run with evaluation cutoff 5 November 2026:
+
+| Model | One-quarter MAPE | Six-quarter MAPE |
+| --- | ---: | ---: |
+| Seasonal baseline | 2.08% | 10.55% |
+| TSA/airfare Ridge model | 5.63% | 5.30% |
+
+Four origins yield 24 scored forecasts per model, with four observations at each horizon. Windows overlap. These results evaluate fixed default numerical choices, not historical LLM recommendations or reviewer overrides. Ranges contained actuals in 2/4 one-quarter cases and 4/4 six-quarter cases; this does not establish calibrated 80% coverage. Results from a new reconstruction must be read from its generated audit and metrics rather than assumed identical.
+
+## Model and guardrails
+
+The seasonal anchor is passenger revenue in the same quarter a year earlier. A nonnegative Ridge regression (`alpha=1`) fits year-over-year log revenue growth to TSA volume growth and airfare CPI growth, using the latest 12 complete joint quarters from 2022 onward, with at least eight required. Incomplete quarters are excluded; source blanks, including the October 2025 airfare observation, are not interpolated.
+
+Recent TSA growth compares 28 days with the same weekdays 364 days earlier. Pricing uses three reported monthly year-over-year pairs. Recent growth fades toward bounded longer-run median growth across six horizons, while the fitted intercept fades to zero. The LLM chooses recent/fading or longer-run growth throughout for each signal; Python computes the numbers. Quarters five and six recursively use earlier forecasts as their seasonal anchors.
+
+Recent growth is bounded to −20%/+20%; longer-run demand to −3%/+6%, pricing to −3%/+4%, and revenue growth to −30%/+30%. Reviewer adjustments are bounded to ±5 percentage points and require a reason. TSA observations older than seven days require explicit review and longer-run demand assumptions. Missing, stale or invalid required inputs remain subject to validation.
+
+Range half-width is the mean of the last four known quarterly revenues × 1.28155 × max(training log-residual standard deviation, 5%) × √horizon. The uncertainty floor and widening rule are simplifying judgments; ranges are illustrative, not calibrated probability intervals. The app shows observed historical coverage and average full width at all six horizons.
+
+Read-only sensitivities apply persistent ±1 percentage-point demand/pricing growth adjustments throughout the forecast. They are separate from uncertainty ranges and from a single daily signal movement. TSA and airfare CPI are market-wide proxies: Delta's network, capacity, cabin mix, international exposure and market share can diverge from them. Fuel is excluded from the app and default data intake; it has no effect on forecasts.
+
+Methodology documents the AI choices, Python calculations and human override/publication flow. The UI labels the numerical summary, AI interpretation and applied strategy source separately. The post-calculation LLM supplies only a short qualitative interpretation. Python writes all displayed amounts, comparisons and caveats. An invalid or failed explanation is retried within the allowance; if it remains unavailable, a clearly labelled factual summary preserves the numerical draft. The system never invents a successful AI assessment.
+
+## Tests and run controls
+
+```powershell
+python -m unittest discover -s . -p "test_*.py" -v
+```
+
+Tests use synthetic inputs and mocked providers; they are not the submitted forecast or proof of hosted source access. Every Gemini attempt is reserved in SQLite before sending. Each request phase permits at most one retry for recoverable server, rate-limit, network or response failures. Retry hints are respected within a bounded wait; permanent errors are not repeatedly retried. AI interpretation validation can also trigger the bounded retry.
+
+The live-run cooldown is 60 seconds within one process. The local SQLite allowance is not a durable Cloud-wide spending cap and can reset if the hosting disk is replaced. Anonymous live AI execution is disabled. There is no paid-provider fallback. Reviewer labels are self-reported; the password gate is suitable only for this public-data case study, not sensitive production data.
+
+## Runtime files and deployment status
+
+Keep `input_data/`, `output_data/`, probe/test output directories, `.venv/`, `.env` and `.streamlit/secrets.toml` outside Git. Include code, tests, dependencies and `.streamlit/config.toml`. Check both ignore rules and tracked files: adding an ignore rule does not untrack existing files.
+
+The overview reads a privacy-redacted approved snapshot from `output_data/published/approved.json` under the runtime artifact root. `FORECAST_ARTIFACT_DIR` can change that root through the process environment. The exported snapshot contains the forecast, sources, narrative and historical evaluation needed for public viewing; raw intake files are needed for live updates, not for rendering that approved overview.
+
+This build does not yet implement external snapshot restoration. To honor the code-only repository setup, deployment must restore the approved export from storage outside Git before public viewing. Downloading an export or approving it on an ephemeral hosting disk alone does not guarantee persistence after a Cloud restart. Do not regenerate or auto-approve a replacement at startup. Final hosted persistence, no-login viewing and the permitted run path still require verification.
+
+Next improvements would be broader historical evaluation and independent interval calibration, stronger signal-choice evaluation, and durable storage with authenticated reviewer identities. They are not claims about the current build.
