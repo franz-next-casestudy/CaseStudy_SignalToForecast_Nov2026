@@ -68,7 +68,7 @@ In the app:
 
 New runs compare with the latest completed saved forecast, selected by generation time across saved draft/approval records. A later approval of an older forecast does not make it a newer numerical run. The comparison timestamp and status are displayed; **Compare with approved forecast** remains separate.
 
-Public visitors can view approved results and inspect an available cached draft without signing in. Authentication is requested in context for live execution or recalculation, and again at every publication. A fresh checkout includes one explicitly approved submission snapshot. The public Approved forecast page displays it without live retrieval or an AI request. A concurrent change to the working-review record blocks recalculation/publication until the reviewer refreshes and inspects the review again.
+Public visitors can view approved results and inspect an available cached draft without signing in. Authentication is requested in context for live execution or recalculation, and again at every publication. A fresh checkout includes the explicitly approved submission snapshot for public viewing without live retrieval or AI calls. A concurrent change to the working-review record blocks recalculation/publication until the reviewer refreshes and inspects the review again.
 
 ## Reproduce the historical numerical backtest
 
@@ -77,7 +77,7 @@ First retrieve the SEC history as above. Then reconstruct the four historical si
 ```powershell
 python download_airfare_vintages.py
 python download_tsa_vintages.py --cutoffs 2024-09-01 2024-12-01 2025-03-01 2025-06-01
-python forecasting.py --backtest-only --cutoff 2026-11-05 --output-dir output_data/vintage_backtest
+python forecasting.py --backtest-only --cutoff 2026-11-06 --output-dir output_data/vintage_backtest
 ```
 
 The vintage downloaders require network access. The backtest command is offline and makes no LLM request, approval or publication. Do not substitute today's signal CSVs if an archive cannot be retrieved.
@@ -86,9 +86,9 @@ ALFRED snapshots use the previous calendar day's vintage. TSA observations are c
 
 `driver_run.json` records cutoff conventions, source verification, training windows and hashes. A successful historical-input audit requires the saved financial source documents and extraction evidence, not merely dated CSV rows. TSA captures provide a conservative information set and can precede a forecast date by several days. Financial history uses stored original-filing values, rather than a complete history of every earlier earnings announcement or later restatement.
 
-The app loads these results from `output_data/vintage_backtest/`, checks their model-code hash, financial-input hash, evaluation cutoff and scored predictions, then freezes the evaluation into a new draft. Existing approved snapshots retain their reviewed evaluation. A model/history change requires a matching backtest; a display-only change does not.
+The app loads these results from `output_data/vintage_backtest/`, checks their model code, financial inputs, evaluation date and scored predictions, then freezes the evaluation into a new draft. Historical evaluation and live forecast dates are separate: a saved evaluation can accompany a later forecast when the numerical code and complete financial model inputs still match. The UI shows its original evaluation cutoff and age; it never presents reuse as a newly executed backtest. An evaluation dated after the forecast is incompatible. Older exploratory current-vintage evaluations retain their stricter identical-date and input-file requirements. Existing approved snapshots retain their reviewed evaluation. A model/history change requires a matching backtest; a display-only change or a new calendar day alone does not. New or revised financial quarters require an updated evaluation rather than an automatic match.
 
-For the reviewed run with evaluation cutoff 5 November 2026:
+For the reviewed run with evaluation cutoff 6 November 2026:
 
 | Model | One-quarter MAPE | Six-quarter MAPE |
 | --- | ---: | ---: |
@@ -111,6 +111,8 @@ Read-only sensitivities apply persistent ±1 percentage-point demand/pricing gro
 
 Methodology documents the AI choices, Python calculations and human override/publication flow. The UI labels the numerical summary, AI interpretation and applied strategy source separately. The post-calculation LLM supplies only a short qualitative interpretation. Python writes all displayed amounts, comparisons and caveats. An invalid or failed explanation is retried within the allowance; if it remains unavailable, a clearly labelled factual summary preserves the numerical draft. The system never invents a successful AI assessment.
 
+After each local backtest, run `python annotate_backtest_financials.py` before uploading its results. This verifies that the local financial CSV exactly matches the original backtest hash, then adds a separate identity for the complete revenue history, quarter dates, filing dates and SEC filing links. It does not change historical predictions, metrics or source hashes. Cloud comparisons can then distinguish identical model inputs from changes to downloaded source-document bytes. Any changed revenue, date or filing link still produces an evaluation mismatch. The original source verification remains specific to the saved historical evaluation, not a claim that fresh response bytes are identical.
+
 ## Tests and run controls
 
 ```powershell
@@ -123,10 +125,12 @@ The live-run cooldown is 60 seconds within one process. The local SQLite allowan
 
 ## Runtime files and deployment status
 
-Keep `input_data/`, `output_data/`, probe/test output directories, `.venv/`, `.env` and `.streamlit/secrets.toml` outside Git. Include code, tests, dependencies and `.streamlit/config.toml`. Check both ignore rules and tracked files: adding an ignore rule does not untrack existing files.
+Keep raw `input_data/`, working run records, probe/test output directories, `.venv/`, `.env` and `.streamlit/secrets.toml` outside Git. Include code, tests, dependencies and `.streamlit/config.toml`. The submission intentionally includes one redacted approved snapshot at `output_data/published/approved.json` and four evaluation outputs under `output_data/vintage_backtest/`: `driver_run.json`, `model_comparison.csv`, `baseline_backtest.csv` and `driver_backtest.csv`. Include `annotate_backtest_financials.py` with the other application and reconstruction scripts. Check both ignore rules and tracked files: adding an ignore rule does not untrack existing files.
 
 The overview reads a privacy-redacted approved snapshot from `output_data/published/approved.json` under the runtime artifact root. `FORECAST_ARTIFACT_DIR` can change that root through the process environment. The exported snapshot contains the forecast, sources, narrative and historical evaluation needed for public viewing; raw intake files are needed for live updates, not for rendering that approved overview.
 
-This build does not yet implement external snapshot restoration. To honor the code-only repository setup, deployment must restore the approved export from storage outside Git before public viewing. Downloading an export or approving it on an ephemeral hosting disk alone does not guarantee persistence after a Cloud restart. Do not regenerate or auto-approve a replacement at startup. Final hosted persistence, no-login viewing and the permitted run path still require verification.
+The committed approved snapshot supplies the public submission forecast on a fresh deployment without downloading data or calling AI. The four committed evaluation outputs let newly generated drafts include matching historical results. Cloud publication updates runtime files, not GitHub: retaining a newer approval across rebuilds requires replacing the committed deployment export manually. External persistent storage is not implemented. Do not regenerate or auto-approve a replacement at startup.
+
+Before submission: personally approve the final reviewed draft; verify the public overview in a signed-out browser after a cold restart; test hosted source access and the permitted run path; recheck the latest reported quarter on submission day; and include the repo/ZIP, CFO memo, build log and insurer-adaptation document. Record actual build time honestly.
 
 Next improvements would be broader historical evaluation and independent interval calibration, stronger signal-choice evaluation, and durable storage with authenticated reviewer identities. They are not claims about the current build.

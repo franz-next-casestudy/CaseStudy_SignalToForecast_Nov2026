@@ -1,6 +1,7 @@
 """Focused tests for the filing-date-gated baseline and historical scoring."""
 
 import json
+import hashlib
 import tempfile
 import unittest
 import shutil
@@ -15,6 +16,9 @@ import pandas as pd
 from forecast_workflow import (approve_draft, atomic_json, build_draft, latest_saved_forecast, load_record, prepare_context,
                                require_current, save_draft, tsa_freshness, validate_decisions,
                                attach_narrative, narrative_context, seal_record)
+from forecast_workflow import financial_evaluation_match, financial_model_reference
+from forecast_workflow import load_evaluation_snapshot
+from annotate_backtest_financials import annotate
 from run_controls import consume_attempt, attempt_usage
 from data_retrieval import (TSA_FALLBACK_URL, daily_dates, main as retrieval_main,
                             parse_tsa_fallback, retrieve_tsa, retrieve_tsa_official_year, write_csv)
@@ -170,6 +174,143 @@ class TsaFallbackTests(unittest.TestCase):
         self.assertEqual(rows["date"].tolist(), ["2025-12-31", "2026-11-03"])
         log = pd.read_csv(self.directory / "retrieval_log.csv", dtype=str, keep_default_na=False)
         self.assertEqual(json.loads(log.iloc[-1]["details_json"])["recovery"], "cache_only")
+
+
+class HistoricalEvaluationCompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        fixture = BaselineTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.base = fixture.input_path.parent
+        (self.base / "input_data").mkdir()
+        self.financial_path = self.base / "input_data" / "delta_quarterly.csv"
+        shutil.copy2(fixture.input_path, self.financial_path)
+        self.output = self.base / "output_data" / "vintage_backtest"
+        self.output.mkdir(parents=True)
+        self.audit_path = self.output / "driver_run.json"
+        self.origins = ["2024-09-01", "2024-12-01", "2025-03-01", "2025-06-01"]
+        self.audit = {"cutoff_date": "2026-11-06", "signal_data_basis": "tsa_pre_cutoff_captures_and_alfred_as_of_vintages",
+                      "input_csv_sha256": {"delta_quarterly.csv": hashlib.sha256(self.financial_path.read_bytes()).hexdigest()},
+                      "forecasting_code_sha256": hashlib.sha256((Path(__file__).parent / "forecasting.py").read_bytes()).hexdigest(),
+                      "strict_point_in_time": True, "historical_signal_evidence_verified": True,
+                      "financial_source_documents_verified": True, "current_vintage_fallback_used": False,
+                      "backtest_origins": [{"cutoff_date": origin, "signal_audit": {"signals_verified": True},
+                                            "financial_audit": {"source_documents_verified": True,
+                                                                "filing_dates_before_cutoff": True}} for origin in self.origins]}
+        atomic_json(self.audit_path, self.audit)
+        annotate(self.financial_path, self.audit_path)
+        metrics = []
+        for filename, model in (("baseline_backtest.csv", "seasonal_naive"), ("driver_backtest.csv", "tsa_airfare_ridge")):
+            scored = [{"cutoff_date": origin, "horizon": horizon,
+                       "quarter": str(pd.Period(origin, freq="Q-DEC") + horizon - 1),
+                       "forecast_usd_millions": 100.0, "actual_usd_millions": 100.0,
+                       "absolute_percentage_error": 0.0} for origin in self.origins for horizon in range(1, 7)]
+            pd.DataFrame(scored).to_csv(self.output / filename, index=False)
+            metrics.extend({"model": model, "horizon": horizon, "origins": 4,
+                            "mape_percent": 0.0, "mae_usd_millions": 0.0} for horizon in range(1, 7))
+        pd.DataFrame(metrics).to_csv(self.output / "model_comparison.csv", index=False)
+
+    def load(self, cutoff="2026-11-07"):
+        fingerprints = {"delta_quarterly.csv": hashlib.sha256(self.financial_path.read_bytes()).hexdigest()}
+        return load_evaluation_snapshot(self.base, cutoff, fingerprints)
+
+    def test_evaluation_remains_compatible_on_later_days_without_changing_its_date(self):
+        for cutoff, age in (("2026-11-06", 0), ("2026-11-07", 1), ("2027-11-06", 365)):
+            with self.subTest(cutoff=cutoff):
+                result = self.load(cutoff)
+                self.assertTrue(result["matches_snapshot_inputs"])
+                self.assertTrue(result["historical_input_evidence_verified"])
+                self.assertEqual(result["cutoff_date"], "2026-11-06")
+                self.assertEqual(result["evaluation_age_days"], age)
+                self.assertEqual(result["compatibility_issues"], [])
+
+    def test_future_evaluation_is_incompatible(self):
+        result = self.load("2026-11-05")
+        self.assertFalse(result["matches_snapshot_inputs"])
+        self.assertIn("dated after", " ".join(result["compatibility_issues"]))
+
+    def test_newer_forecast_does_not_hide_changed_financial_values(self):
+        rows = pd.read_csv(self.financial_path)
+        rows.loc[0, REVENUE] += 1
+        rows.to_csv(self.financial_path, index=False)
+        result = self.load()
+        self.assertFalse(result["matches_snapshot_inputs"])
+        self.assertFalse(result["matches_financial_inputs"])
+        self.assertIn("Financial model values", " ".join(result["compatibility_issues"]))
+
+    def test_newer_forecast_does_not_hide_changed_numerical_code(self):
+        audit = json.loads(self.audit_path.read_text())
+        audit["forecasting_code_sha256"] = "f" * 64
+        atomic_json(self.audit_path, audit)
+        result = self.load()
+        self.assertFalse(result["matches_snapshot_inputs"])
+        self.assertIn("numerical model code", " ".join(result["compatibility_issues"]))
+
+    def test_invalid_evaluation_date_and_modified_metrics_remain_unavailable(self):
+        audit = json.loads(self.audit_path.read_text())
+        audit["cutoff_date"] = "not-a-date"
+        atomic_json(self.audit_path, audit)
+        self.assertEqual(self.load()["status"], "unavailable")
+        audit["cutoff_date"] = "2026-11-06"
+        atomic_json(self.audit_path, audit)
+        metrics = pd.read_csv(self.output / "model_comparison.csv")
+        metrics.loc[0, "mape_percent"] = 99
+        metrics.to_csv(self.output / "model_comparison.csv", index=False)
+        self.assertEqual(self.load()["status"], "unavailable")
+
+
+class FinancialEvaluationIdentityTests(unittest.TestCase):
+    def setUp(self):
+        fixture = BaselineTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.path = fixture.input_path
+        self.rows = fixture.raw.copy()
+        self.audit_path = self.path.parent / "driver_run.json"
+        self.original = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        self.audit = {"input_csv_sha256": {"delta_quarterly.csv": self.original},
+                      "unchanged_evaluation": {"mape": 5.63}}
+        atomic_json(self.audit_path, self.audit)
+        annotate(self.path, self.audit_path)
+        self.annotated = json.loads(self.audit_path.read_text())
+
+    def match(self):
+        digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        return financial_evaluation_match(self.annotated, self.path, digest)
+
+    def test_identical_model_inputs_accept_changed_document_hashes_and_row_format(self):
+        self.rows["source_sha256"] = "b" * 64
+        self.rows[REVENUE] = self.rows[REVENUE].map(lambda x: f"{x:.2f}")
+        self.rows.iloc[::-1].to_csv(self.path, index=False, lineterminator="\r\n")
+        self.assertEqual(self.match(), (True, False, "model_values_dates_and_filing_links"))
+        self.assertEqual(self.annotated["input_csv_sha256"], self.audit["input_csv_sha256"])
+        self.assertEqual(self.annotated["unchanged_evaluation"], self.audit["unchanged_evaluation"])
+
+    def test_revenue_dates_and_filing_links_must_match(self):
+        for field, value in ((REVENUE, 9999), ("published_date", "2019-04-22"),
+                             ("source_url", "https://www.sec.gov/Archives/edgar/data/27904/different.htm")):
+            with self.subTest(field=field):
+                changed = self.rows.copy()
+                changed.loc[0, field] = value
+                changed.to_csv(self.path, index=False)
+                self.assertFalse(self.match()[0])
+
+    def test_unannotated_audit_does_not_accept_different_csv(self):
+        self.assertEqual(financial_evaluation_match(self.audit, self.path, "f" * 64)[:2], (False, False))
+
+    def test_annotation_refuses_nonoriginal_csv(self):
+        self.path.write_bytes(self.path.read_bytes() + b"\n")
+        with self.assertRaisesRegex(ValueError, "differs from the backtested original"):
+            annotate(self.path, self.audit_path)
+
+    def test_reference_corruption_or_wrong_original_identity_is_rejected(self):
+        self.annotated["financial_model_reference"]["rows"][0][REVENUE] = 9999
+        with self.assertRaisesRegex(ValueError, "integrity"):
+            self.match()
+        self.annotated["financial_model_reference"] = financial_model_reference(self.path)
+        self.annotated["financial_model_reference"]["original_csv_sha256"] = "e" * 64
+        with self.assertRaisesRegex(ValueError, "backtested input"):
+            self.match()
 
 
 class BaselineTests(unittest.TestCase):

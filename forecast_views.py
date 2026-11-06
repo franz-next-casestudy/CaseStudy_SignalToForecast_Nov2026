@@ -261,7 +261,19 @@ def historical_performance(record):
         if evaluation.get("historical_input_evidence_verified"):
             st.caption("Historical inputs: TSA pages archived before each forecast date, ALFRED airfare vintages, and financial filings available before each date. Saved source files were checked during the backtest.")
         if not evaluation.get("matches_snapshot_inputs"):
-            st.warning("These saved results do not match this forecast's model code, financial data or evaluation cutoff. They are shown for reference.")
+            issues = evaluation.get("compatibility_issues")
+            message = ("These saved results are shown for reference. " + " ".join(issues) if issues else
+                       "These saved results do not match this forecast's model code, financial data or evaluation cutoff. They are shown for reference.")
+            st.warning(message)
+        elif evaluation.get("matches_financial_file_bytes") is False:
+            st.caption("Financial values, filing dates and SEC source links match the saved backtest. "
+                       "Downloaded file bytes differ; original source hashes remain in the backtest audit. "
+                       "The historical source verification applies to that saved evaluation.")
+        if evaluation.get("matches_snapshot_inputs") and evaluation.get("evaluation_age_days", 0) > 0:
+            st.caption(f"This forecast uses the historical evaluation as of {evaluation['cutoff_date']} "
+                       f"({evaluation['evaluation_age_days']} days before the forecast cutoff). "
+                       "The evaluated numerical model and financial inputs remain compatible. "
+                       "These are saved historical results, not a newly run backtest.")
         if evaluation.get("origin_dates"):
             st.caption("Historical forecast dates: " + ", ".join(evaluation["origin_dates"]))
         range_rows = range_performance_rows(metrics)
