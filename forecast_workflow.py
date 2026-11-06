@@ -123,6 +123,42 @@ def validate_tsa_review(context, review):
             "cutoff_date": context["cutoff_date"], "required_action": "use_structural"}
 
 
+def financial_model_reference(path):
+    """Identify validated model values and filing references, separately from source bytes."""
+    financials = load_financials(path)
+    columns = ["quarter", "period_end", "published_date", REVENUE,
+               "source_url", "additional_source_url"]
+    rows = []
+    for row in financials[columns].to_dict(orient="records"):
+        row["period_end"] = row["period_end"].isoformat()
+        row["published_date"] = row["published_date"].isoformat()
+        rows.append(row)
+    payload = json.dumps(rows, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return {"schema_version": 1, "columns": columns, "rows": rows,
+            "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest()}
+
+
+def financial_evaluation_match(audit, financial_path, current_csv_hash):
+    """Old audits require exact bytes; annotated audits also admit identical model inputs."""
+    original_hash = audit.get("input_csv_sha256", {}).get("delta_quarterly.csv")
+    byte_match = original_hash == current_csv_hash
+    reference = audit.get("financial_model_reference")
+    if reference is None:
+        return byte_match, byte_match, "exact_csv_bytes"
+    if (reference.get("schema_version") != 1
+            or reference.get("original_csv_sha256") != original_hash):
+        raise ValueError("Financial reference does not identify the backtested input")
+    payload = json.dumps(reference["rows"], sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if hashlib.sha256(payload.encode("utf-8")).hexdigest() != reference.get("sha256"):
+        raise ValueError("Financial reference integrity check failed")
+    current = financial_model_reference(financial_path)
+    value_match = (reference.get("columns") == current["columns"]
+                   and reference.get("sha256") == current["sha256"])
+    if byte_match and not value_match:
+        raise ValueError("Financial reference conflicts with identical original CSV")
+    return value_match, byte_match, "model_values_dates_and_filing_links"
+
+
 def load_evaluation_snapshot(base_dir, cutoff, fingerprints):
     """Read saved evaluation only; never download, rerun, or replace an approval."""
     output = Path(base_dir) / "output_data"
@@ -144,11 +180,28 @@ def load_evaluation_snapshot(base_dir, cutoff, fingerprints):
             raise ValueError("Duplicate evaluation metrics")
         numerical_hash = hashlib.sha256((Path(__file__).parent / "forecasting.py").read_bytes()).hexdigest()
         historical = audit.get("signal_data_basis") == "tsa_pre_cutoff_captures_and_alfred_as_of_vintages"
-        financial_match = audit.get("input_csv_sha256", {}).get("delta_quarterly.csv") == fingerprints["delta_quarterly.csv"]
+        financial_match, financial_bytes_match, financial_basis = financial_evaluation_match(
+            audit, Path(base_dir) / "input_data" / "delta_quarterly.csv", fingerprints["delta_quarterly.csv"])
         code_match = audit.get("forecasting_code_sha256") == numerical_hash
-        cutoff_match = audit.get("cutoff_date") == str(cutoff)
-        matches = financial_match and code_match and cutoff_match if historical else (
+        evaluation_date = date.fromisoformat(audit["cutoff_date"])
+        forecast_date = date.fromisoformat(str(cutoff))
+        age_days = (forecast_date - evaluation_date).days
+        cutoff_match = evaluation_date == forecast_date
+        # An evaluation measures historical performance as of its own date.
+        # A later live forecast does not invalidate it or advance its cutoff.
+        date_compatible = age_days >= 0 if historical else cutoff_match
+        matches = financial_match and code_match and date_compatible if historical else (
             audit.get("input_csv_sha256") == fingerprints and cutoff_match and code_match)
+        issues = []
+        if not code_match:
+            issues.append("The numerical model code differs from the evaluated version.")
+        if not financial_match:
+            issues.append("Financial model values, dates or filing references differ from the evaluated history.")
+        if not date_compatible:
+            issues.append("The evaluation is dated after this forecast." if age_days < 0 else
+                          "This exploratory evaluation requires an identical cutoff date.")
+        if not historical and audit.get("input_csv_sha256") != fingerprints:
+            issues.append("This exploratory evaluation uses different signal input files.")
         origins = audit.get("backtest_origins", [])
         origin_dates = [item["cutoff_date"] for item in origins]
         evidence_verified = historical and len(set(origin_dates)) >= 4 and all(
@@ -192,6 +245,11 @@ def load_evaluation_snapshot(base_dir, cutoff, fingerprints):
         return {"cutoff_date": audit.get("cutoff_date"), "data_basis": audit.get("signal_data_basis", "current_vintage_observation_date_cutoff"),
                 "matches_snapshot_inputs": bool(matches), "matches_numerical_code": code_match,
                 "matches_financial_inputs": financial_match, "historical_input_evidence_verified": verified,
+                "matches_financial_file_bytes": financial_bytes_match,
+                "financial_comparison_basis": financial_basis,
+                "forecast_cutoff_date": str(cutoff), "evaluation_age_days": age_days,
+                "evaluation_date_compatible": date_compatible,
+                "compatibility_issues": issues,
                 "strict_point_in_time_scope": audit.get("strict_point_in_time_scope"),
                 "origin_dates": origin_dates, "limitations": audit.get("limitations", []),
                 "metrics": frame_records(metrics), "details": details, "status": "loaded",
@@ -257,6 +315,9 @@ def prepare_context(base_dir, cutoff):
                        else "Historical input availability remains unverified"),
             "historical_input_evidence_verified": evaluation["historical_input_evidence_verified"],
             "scope": "Default numerical model; AI recommendations and human overrides were not backtested",
+            "evaluation_cutoff_date": evaluation["cutoff_date"],
+            "forecast_cutoff_date": str(cutoff),
+            "evaluation_age_days": evaluation["evaluation_age_days"],
             "origin_dates": evaluation["origin_dates"],
             "limitations": "Small, overlapping sample. Ranges are illustrative, not coverage calibrated.",
             "metrics": [row for row in evaluation["metrics"] if row["horizon"] in (1, 6)]}

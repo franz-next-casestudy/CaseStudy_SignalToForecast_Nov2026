@@ -953,5 +953,269 @@
     "Stored original-filing financial values are used, not a full history of management earnings-release/restatement vintages.",
     "The numerical model's fixed default signal actions are evaluated; AI recommendations and human overrides are not backtested.",
     "The sample is small and forecast windows overlap. Ranges are illustrative, not calibrated 80% coverage."
-  ]
+  ],
+  "financial_model_reference": {
+    "schema_version": 1,
+    "columns": [
+      "quarter",
+      "period_end",
+      "published_date",
+      "passenger_revenue_usd_millions",
+      "source_url",
+      "additional_source_url"
+    ],
+    "rows": [
+      {
+        "quarter": "2019Q1",
+        "period_end": "2019-03-31",
+        "published_date": "2019-04-10",
+        "passenger_revenue_usd_millions": 9254.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790419000005/dal331201910q.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2019Q2",
+        "period_end": "2019-06-30",
+        "published_date": "2019-07-11",
+        "passenger_revenue_usd_millions": 11368.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790419000008/dal630201910q.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2019Q3",
+        "period_end": "2019-09-30",
+        "published_date": "2019-10-10",
+        "passenger_revenue_usd_millions": 11410.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790419000012/dal930201910q.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2019Q4",
+        "period_end": "2019-12-31",
+        "published_date": "2020-02-13",
+        "passenger_revenue_usd_millions": 10245.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790420000004/dal-20191231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790419000012/dal930201910q.htm"
+      },
+      {
+        "quarter": "2020Q1",
+        "period_end": "2020-03-31",
+        "published_date": "2020-04-22",
+        "passenger_revenue_usd_millions": 7569.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790420000007/dal-20200331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2020Q2",
+        "period_end": "2020-06-30",
+        "published_date": "2020-07-15",
+        "passenger_revenue_usd_millions": 678.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790420000010/dal-20200630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2020Q3",
+        "period_end": "2020-09-30",
+        "published_date": "2020-10-14",
+        "passenger_revenue_usd_millions": 1938.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790420000013/dal-20200930.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2020Q4",
+        "period_end": "2020-12-31",
+        "published_date": "2021-02-12",
+        "passenger_revenue_usd_millions": 2698.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790421000003/dal-20201231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790420000013/dal-20200930.htm"
+      },
+      {
+        "quarter": "2021Q1",
+        "period_end": "2021-03-31",
+        "published_date": "2021-04-15",
+        "passenger_revenue_usd_millions": 2748.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790421000006/dal-20210331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2021Q2",
+        "period_end": "2021-06-30",
+        "published_date": "2021-07-14",
+        "passenger_revenue_usd_millions": 5339.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790421000009/dal-20210630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2021Q3",
+        "period_end": "2021-09-30",
+        "published_date": "2021-10-13",
+        "passenger_revenue_usd_millions": 7191.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790421000012/dal-20210930.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2021Q4",
+        "period_end": "2021-12-31",
+        "published_date": "2022-02-11",
+        "passenger_revenue_usd_millions": 7241.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790422000003/dal-20211231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790421000012/dal-20210930.htm"
+      },
+      {
+        "quarter": "2022Q1",
+        "period_end": "2022-03-31",
+        "published_date": "2022-04-13",
+        "passenger_revenue_usd_millions": 6907.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790422000006/dal-20220331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2022Q2",
+        "period_end": "2022-06-30",
+        "published_date": "2022-07-13",
+        "passenger_revenue_usd_millions": 10958.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790422000010/dal-20220630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2022Q3",
+        "period_end": "2022-09-30",
+        "published_date": "2022-10-13",
+        "passenger_revenue_usd_millions": 11464.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790422000013/dal-20220930.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2022Q4",
+        "period_end": "2022-12-31",
+        "published_date": "2023-02-10",
+        "passenger_revenue_usd_millions": 10889.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790423000003/dal-20221231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790422000013/dal-20220930.htm"
+      },
+      {
+        "quarter": "2023Q1",
+        "period_end": "2023-03-31",
+        "published_date": "2023-04-13",
+        "passenger_revenue_usd_millions": 10411.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790423000006/dal-20230331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2023Q2",
+        "period_end": "2023-06-30",
+        "published_date": "2023-07-13",
+        "passenger_revenue_usd_millions": 13205.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790423000009/dal-20230630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2023Q3",
+        "period_end": "2023-09-30",
+        "published_date": "2023-10-12",
+        "passenger_revenue_usd_millions": 13119.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790423000013/dal-20230930.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2023Q4",
+        "period_end": "2023-12-31",
+        "published_date": "2024-02-12",
+        "passenger_revenue_usd_millions": 12174.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790424000003/dal-20231231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790423000013/dal-20230930.htm"
+      },
+      {
+        "quarter": "2024Q1",
+        "period_end": "2024-03-31",
+        "published_date": "2024-04-10",
+        "passenger_revenue_usd_millions": 11131.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790424000006/dal-20240331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2024Q2",
+        "period_end": "2024-06-30",
+        "published_date": "2024-07-11",
+        "passenger_revenue_usd_millions": 13841.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790424000009/dal-20240630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2024Q3",
+        "period_end": "2024-09-30",
+        "published_date": "2024-10-10",
+        "passenger_revenue_usd_millions": 13107.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790424000012/dal-20240930.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2024Q4",
+        "period_end": "2024-12-31",
+        "published_date": "2025-02-11",
+        "passenger_revenue_usd_millions": 12815.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790425000004/dal-20241231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790424000012/dal-20240930.htm"
+      },
+      {
+        "quarter": "2025Q1",
+        "period_end": "2025-03-31",
+        "published_date": "2025-04-09",
+        "passenger_revenue_usd_millions": 11480.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790425000007/dal-20250331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2025Q2",
+        "period_end": "2025-06-30",
+        "published_date": "2025-07-10",
+        "passenger_revenue_usd_millions": 13867.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790425000012/dal-20250630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2025Q3",
+        "period_end": "2025-09-30",
+        "published_date": "2025-10-09",
+        "passenger_revenue_usd_millions": 13506.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790425000020/dal-20250930.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2025Q4",
+        "period_end": "2025-12-31",
+        "published_date": "2026-02-11",
+        "passenger_revenue_usd_millions": 12916.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790426000013/dal-20251231.htm",
+        "additional_source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790425000020/dal-20250930.htm"
+      },
+      {
+        "quarter": "2026Q1",
+        "period_end": "2026-03-31",
+        "published_date": "2026-04-08",
+        "passenger_revenue_usd_millions": 12302.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790426000022/dal-20260331.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2026Q2",
+        "period_end": "2026-06-30",
+        "published_date": "2026-07-10",
+        "passenger_revenue_usd_millions": 15607.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790426000031/dal-20260630.htm",
+        "additional_source_url": ""
+      },
+      {
+        "quarter": "2026Q3",
+        "period_end": "2026-09-30",
+        "published_date": "2026-10-09",
+        "passenger_revenue_usd_millions": 15534.0,
+        "source_url": "https://www.sec.gov/Archives/edgar/data/27904/000002790426000038/dal-20260930.htm",
+        "additional_source_url": ""
+      }
+    ],
+    "sha256": "fcfc0c6f803a4df5013068ef00240727d44376b56dade6565b249e2c34acd42d",
+    "original_csv_sha256": "690ea1324f78c025236710b0dac638008a59eba9a128af8ee7394c99faedbdc9",
+    "basis": "Validated revenue values, quarter dates, filing dates and SEC filing links; source-byte hashes retained separately."
+  }
 }
